@@ -1,6 +1,7 @@
 #include "decimation.h"
 #include <iostream>
 #include <cmath>
+#include <utility>
 #include <algorithm>
 #include <vtkSmartPointer.h>
 #include <vtkUnstructuredGridReader.h>
@@ -89,8 +90,6 @@ void Decimation::SelectValidPairs(double treshold)
                 std::vector<int> pair {point1, point2};
                 this->validPairs.push_back(pair);
                 
-                this->validPairs1D.push_back(point1);
-                this->validPairs1D.push_back(point2);
             }
         }
         int point1 = this->verticesId[i];
@@ -105,12 +104,6 @@ void Decimation::SelectValidPairs(double treshold)
         this->validPairs.push_back(pair2);
         this->validPairs.push_back(pair3);
         
-        this->validPairs1D.push_back(point1);
-        this->validPairs1D.push_back(point2);
-        this->validPairs1D.push_back(point2);
-        this->validPairs1D.push_back(point3);
-        this->validPairs1D.push_back(point1);
-        this->validPairs1D.push_back(point3);
     }
     /*for (int i = 0; i < this->numVertices; i++)
     {
@@ -156,7 +149,9 @@ void Decimation::ComputeQMatrices()
             Eigen::Matrix3d A(3, 3);
             Eigen::Vector3d B(3), x(3);
             
-            A << tr1[j][0][0], tr1[j][0][1], tr1[j][0][2], tr1[j][1][0], tr1[j][1][1], tr1[j][1][2], tr1[j][2][0], tr1[j][2][1], tr1[j][2][2];
+            A << tr1[j][0][0], tr1[j][0][1], tr1[j][0][2], 
+                 tr1[j][1][0], tr1[j][1][1], tr1[j][1][2], 
+                 tr1[j][2][0], tr1[j][2][1], tr1[j][2][2];
             B << -1, -1, -1;
             x = A.colPivHouseholderQr().solve(B);
             double a = x[0];
@@ -165,7 +160,10 @@ void Decimation::ComputeQMatrices()
             double d = 1;
             
             Eigen::Matrix4d k1(4, 4);  
-            k1 << a*a, a*b, a*c, a*d, a*b, b*b, b*c, b*d, a*c, b*c, c*c, c*d, d*a, d*b, d*c, d*d;
+            k1 << a*a, a*b, a*c, a*d, 
+                  a*b, b*b, b*c, b*d, 
+                  a*c, b*c, c*c, c*d, 
+                  d*a, d*b, d*c, d*d;
             K1 = K1+ k1;       
         }
 
@@ -176,7 +174,9 @@ void Decimation::ComputeQMatrices()
             Eigen::Matrix3d A(3, 3);
             Eigen::Vector3d B(3), x(3);
             
-            A << tr2[j][0][0], tr2[j][0][1], tr2[j][0][2], tr2[j][1][0], tr2[j][1][1], tr2[j][1][2], tr2[j][2][0], tr2[j][2][1], tr2[j][2][2];
+            A << tr2[j][0][0], tr2[j][0][1], tr2[j][0][2], 
+                 tr2[j][1][0], tr2[j][1][1], tr2[j][1][2], 
+                 tr2[j][2][0], tr2[j][2][1], tr2[j][2][2];
             B << -1, -1, -1;
             x = A.colPivHouseholderQr().solve(B);
             double a = x[0];
@@ -185,17 +185,71 @@ void Decimation::ComputeQMatrices()
             double d = 1;
             
             Eigen::Matrix4d k2(4, 4);  
-            k2 << a*a, a*b, a*c, a*d, a*b, b*b, b*c, b*d, a*c, b*c, c*c, c*d, d*a, d*b, d*c, d*d;
+            k2 << a*a, a*b, a*c, a*d,
+                  a*b, b*b, b*c, b*d, 
+                  a*c, b*c, c*c, c*d, 
+                  d*a, d*b, d*c, d*d;
             K2= K2+ k2;  
         }
         
         Eigen::Vector4d v1, v2;
-        v1 << this->vertices[pair[0]][0], this->vertices[pair[0]][1], this->vertices[pair[0]][2], 1;
-        v1 << this->vertices[pair[1]][0], this->vertices[pair[1]][1], this->vertices[pair[1]][2], 1;
+        v1 << this->vertices[pair[0]][0], 
+              this->vertices[pair[0]][1], 
+              this->vertices[pair[0]][2], 1;
+        v1 << this->vertices[pair[1]][0], 
+              this->vertices[pair[1]][1], 
+              this->vertices[pair[1]][2], 1;
         double q1 = v1.transpose() * K1 * v1;
         double q2 = v2.transpose() * K2 * v2;
         double q = q1 + q2;
-        this->qmatrices.push_back(q);
+        std::pair <int, double> p = std::make_pair(i, q);
+        this->qmatrices.push_back(p);
         
+    }
+}
+
+void Decimation::SortValidPairs()
+{
+    std::sort(this->qmatrices.begin(), this->qmatrices.end());
+}
+
+void Decimation::RemoveVertices(double param)
+{
+    for (int i = 0; i < this->numVertices; i ++)
+    {
+        this->newVertices.push_back(this->vertices[i]);
+    }
+    
+    for (int i = 0; i < this->verticesId.size(); i++)
+    {
+        this->newVerticesId.push_back(this->verticesId[i]);
+    }
+
+    this->newNumVertices = int(this->numVertices * param);
+    int removeVert = this->numVertices - this->newNumVertices;
+    
+    if (this->validPairs.size() < removeVert)
+    {
+        removeVert = this->validPairs.size();
+    }
+
+    std::vector<int> removedId;
+    
+    for (int i = 0; i < removeVert; i++)
+    {
+        int ind1 = this->validPairs[std::get<0>(this->qmatrices[i])][0];
+        int ind2 = this->validPairs[std::get<0>(this->qmatrices[i])][1];
+        
+        this->newVertices[ind2] = this->newVertices[ind1];
+        removedId.push_back(ind2);
+    }
+    
+    for (int i = 0; i < this->verticesId.size(); i ++)
+    {
+        if (std::find(removedId.begin(), removedId.end(), this->verticesId[i]) != removedId.end())
+        {
+            this->verticesId.erase(this->verticesId.begin() + i);
+            i = i - 1;
+        }
     }
 }
