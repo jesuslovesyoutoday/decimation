@@ -7,12 +7,24 @@
 #include <vtkUnstructuredGridReader.h>
 #include <vtkUnstructuredGrid.h>
 #include <vtkPointData.h>
+#include <vtkPolyData.h>
 #include <vtkPoints.h>
 #include <vtkCellArray.h>
+#include <vtkPolyDataReader.h>
+#include <vtkPolyDataWriter.h>
+#include <vtkUnstructuredGridWriter.h>
+
 #include <xtensor/xtensor.hpp>
 #include <xtensor/xio.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 #include <Eigen/Dense>
+
+
+bool Sorting(std::pair<int, double> &a, std::pair<int, double> &b)
+{   
+    return (a.second < b.second);
+}
+
 
 double DistanceBPoints(std::vector<double> p1, std::vector<double> p2)
 {   
@@ -34,19 +46,24 @@ void Decimation::ReadFromVtk(std::string filename)
     vtkSmartPointer<vtkPoints> points = unstructuredGrid->GetPoints();
     
     this->numVertices = points->GetNumberOfPoints();
-    for (int i = 0; i < this->numVertices * 3; i++)
+    for (int i = 0; i < this->numVertices; i++)
     {
         double vertex[3];
         points->GetPoint(i, vertex);
         std::vector<double> point;
         for (int j = 0; j < 3; j++)
         {
-            point.push_back(vertex[i]);
+            point.push_back(vertex[j]);
         }
         
         this->vertices.push_back(point);
     }
     
+    /*for (int i = 0; i < this->numVertices; i++)
+    {
+        std::vector<double> point = this->vertices[i];
+        std::cout << point[0] << " " << point[1] << " " << point[2] << std::endl;
+    }*/
     
     vtkSmartPointer<vtkCellArray> cells = unstructuredGrid->GetCells();
     int ncells = cells->GetNumberOfCells();
@@ -54,7 +71,7 @@ void Decimation::ReadFromVtk(std::string filename)
     vtkSmartPointer<vtkIdList> idList = vtkSmartPointer<vtkIdList>::New();
     for (int i = 0; i < ncells; i++) 
     {
-        cells->GetCell(i, idList);
+        cells->GetCellAtId(i, idList);
         int nverts = idList->GetNumberOfIds();
         for (int j=0; j<nverts; j++) 
         {
@@ -65,21 +82,22 @@ void Decimation::ReadFromVtk(std::string filename)
     for (int i = 0; i < this->verticesId.size(); i=i+3)
     {
         std::vector<std::vector<double>> triang;
+        std::vector<int> id;
         triang.push_back(this->vertices[this->verticesId[i]]);
+        id.push_back(this->verticesId[i]);
         triang.push_back(this->vertices[this->verticesId[i+1]]);
+        id.push_back(this->verticesId[i+1]);
         triang.push_back(this->vertices[this->verticesId[i+2]]);
+        id.push_back(this->verticesId[i+2]);
         this->triangles.push_back(triang);
+        this->trId.push_back(id);
     }  
-    /*for (int i = 0; i < this->numVertices; i++)
-    {
-        std::cout << this->vertices[i][0] << this->vertices[i][1] << this->vertices[i][2] << std::endl;
-    }*/
 };
 
 void Decimation::SelectValidPairs(double treshold)
 {
     this->t = treshold;
-    for (int i = 0; i < this->numVertices; i++)
+    for (int i = 0; i < this->verticesId.size(); i = i + 3)
     {
         if (i != 0)
         {
@@ -105,9 +123,12 @@ void Decimation::SelectValidPairs(double treshold)
         this->validPairs.push_back(pair3);
         
     }
-    /*for (int i = 0; i < this->numVertices; i++)
+    /*for (int i = 0; i < this->validPairs.size(); i++)
     {
-        std::cout << this->validPairs[i][0] << "  " << this->validPairs[i][1] << std::endl;
+        std::vector<double> p1 = this->vertices[this->validPairs[i][0]];
+        std::vector<double> p2 = this->vertices[this->validPairs[i][1]];
+        std::cout << DistanceBPoints(p1, p2) << std::endl;
+        //std::cout << this->validPairs[i][0] << "  " << this->validPairs[i][1] << std::endl;
     }*/
 }
 
@@ -210,29 +231,32 @@ void Decimation::ComputeQMatrices()
 
 void Decimation::SortValidPairs()
 {
-    std::sort(this->qmatrices.begin(), this->qmatrices.end());
+    std::sort(this->qmatrices.begin(), this->qmatrices.end(), Sorting);
 }
 
 void Decimation::RemoveVertices(double param)
 {
+    std::vector<std::vector<double>> vert;
     for (int i = 0; i < this->numVertices; i ++)
     {
-        this->newVertices.push_back(this->vertices[i]);
+        vert.push_back(this->vertices[i]);
     }
     
-    for (int i = 0; i < this->verticesId.size(); i++)
+    /*for (int i = 0; i < this->verticesId.size(); i++)
     {
         this->newVerticesId.push_back(this->verticesId[i]);
-    }
+    }*/
 
-    this->newNumVertices = int(this->numVertices * param);
+    this->newNumVertices = int(this->numVertices * (1 - param));
     int removeVert = this->numVertices - this->newNumVertices;
     
     if (this->validPairs.size() < removeVert)
     {
         removeVert = this->validPairs.size();
     }
-
+    
+    removeVert = 1;
+    
     std::vector<int> removedId;
     
     for (int i = 0; i < removeVert; i++)
@@ -240,16 +264,133 @@ void Decimation::RemoveVertices(double param)
         int ind1 = this->validPairs[std::get<0>(this->qmatrices[i])][0];
         int ind2 = this->validPairs[std::get<0>(this->qmatrices[i])][1];
         
-        this->newVertices[ind2] = this->newVertices[ind1];
+        vert[ind2] = vert[ind1];
         removedId.push_back(ind2);
+        
+        for (int j = 0; j < this->trId.size(); j++)
+        {
+            std::vector<int> tr = this->trId[j];
+            if ((std::find(tr.begin(), tr.end(), ind1) != tr.end()) && (std::find(tr.begin(), tr.end(), ind2) != tr.end()))
+            {
+                this->trId.erase(this->trId.begin() + j);
+            }
+        }
+        for (int j = 0; j < this->trId.size(); j++)
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                if (this->trId[j][k] == ind2)
+                {
+                    trId[j][k] = ind1;
+                }
+            }
+        }
     }
     
-    for (int i = 0; i < this->verticesId.size(); i ++)
+    for (int i = 0; i < this->trId.size(); i++)
     {
-        if (std::find(removedId.begin(), removedId.end(), this->verticesId[i]) != removedId.end())
+        this->newVerticesId.push_back(this->trId[i][0]);
+        this->newVerticesId.push_back(this->trId[i][1]);
+        this->newVerticesId.push_back(this->trId[i][0]);
+    }
+
+    /*for (int i = 0; i < this->newVerticesId.size(); i ++)
+    {
+        if (std::find(removedId.begin(), removedId.end(), this->newVerticesId[i]) != removedId.end())
         {
-            this->verticesId.erase(this->verticesId.begin() + i);
+            this->newVerticesId.erase(this->newVerticesId.begin() + i);
             i = i - 1;
         }
     }
+
+    for (int i = 0; i < this->newVerticesId.size(); i ++)
+    {
+        std::cout << this->newVerticesId[i] << std::endl;
+    }
+    
+    for (int i = 0; i < vert.size(); i++)
+    {
+        if (std::find(this->newVerticesId.begin(), this->newVerticesId.end(), i) != this->newVerticesId.end())
+        {
+            //this->newVertices.push_back(vert[i]);
+        }
+        else
+        {
+            vert.erase(vert.begin() + i);
+            for (int j = 0; j < this->newVerticesId.size(); j++)
+            {
+                //std::cout << "hi" << std::endl;
+                if (this->newVerticesId[j] > i)
+                {
+                    this->newVerticesId[j] -= 1;
+                }
+            }
+        }
+    }*/
+    
+    for (int i = 0; i < vert.size(); i++)
+    {
+        this->newVertices.push_back(vert[i]);
+    }
+
+    this->newNumVertices = this->newVertices.size();
+    
+    /*for (int i = 0; i < this->newVerticesId.size(); i++)
+    {
+        while (this->newVerticesId[i] == this->newVerticesId[i+1])
+        {
+            this->newVerticesId.erase(this->newVerticesId.begin() + i + 1);
+            if(i+1 == this->newVerticesId.size())
+            {
+                break;
+            }
+        }
+    }*/
+}
+
+void Decimation::WriteNewVtk(std::string filename, std::string filename_out)
+{
+    vtkSmartPointer<vtkPoints> newVtkVertices = vtkSmartPointer<vtkPoints>::New();
+    newVtkVertices->SetNumberOfPoints(this->newNumVertices);
+    for (int i = 0; i < this->newNumVertices; i++)
+    {   
+        double coords[3];
+        for (int j = 0; j < 3; j++)
+        {
+            coords[j] = this->newVertices[i][j];
+        }
+        newVtkVertices->SetPoint(i, coords);
+        
+    }
+    
+    vtkSmartPointer<vtkCellArray> cells = vtkSmartPointer<vtkCellArray>::New();
+    for (int i = 0; i < this->newVerticesId.size(); i = i + 3)
+    {
+        vtkIdType pointIds[3];
+        pointIds[0] = this->newVerticesId[i];
+        pointIds[1] = this->newVerticesId[i+1];
+        pointIds[2] = this->newVerticesId[i+2];
+        cells->InsertNextCell(3, pointIds);
+    }
+    
+    /*for (int i = 0; i < this->newVerticesId.size(); i++)
+    {
+        std::cout << this->newVerticesId[i] << std:: endl;
+    }
+    std::cout << this->newVerticesId.size() << std:: endl;*/
+    
+   vtkSmartPointer<vtkUnstructuredGridReader> reader = vtkSmartPointer<vtkUnstructuredGridReader>::New();
+    reader->SetFileName(filename.c_str());
+    reader->Update();
+    
+    vtkSmartPointer<vtkUnstructuredGrid> uGrid = reader->GetOutput();
+    
+    uGrid->SetPoints(newVtkVertices);
+    uGrid->SetCells(VTK_TRIANGLE, cells);
+
+
+    vtkSmartPointer<vtkUnstructuredGridWriter> writer = vtkSmartPointer<vtkUnstructuredGridWriter>::New();
+    writer->SetInputData(uGrid);
+    writer->SetFileName(filename_out.c_str());
+    writer->Write();
 }
