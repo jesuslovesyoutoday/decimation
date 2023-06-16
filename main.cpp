@@ -12,8 +12,8 @@ int main()
     std::cout << "Enter .vtk output filename ..." << std::endl;
     std::cin >> filename_out;
 
-    double t = 1e-20;
-    double param = 0.4; // want to remove 20% of all vertices
+    double t = 0.001;
+    double param = 0.1; // want to remove param*100% of all vertices
     
     Decimation decimation;
     
